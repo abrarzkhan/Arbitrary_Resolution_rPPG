@@ -77,24 +77,6 @@ class WorkerInfo(object):
 def get_worker_info():
     r"""Returns the information about the current
     :class:`~torch.utils.data.DataLoader` iterator worker process.
-    When called in a worker, this returns an object guaranteed to have the
-    following attributes:
-    * :attr:`id`: the current worker id.
-    * :attr:`num_workers`: the total number of workers.
-    * :attr:`seed`: the random seed set for the current worker. This value is
-      determined by main process RNG and the worker id. See
-      :class:`~torch.utils.data.DataLoader`'s documentation for more details.
-    * :attr:`dataset`: the copy of the dataset object in **this** process. Note
-      that this will be a different object in a different process than the one
-      in the main process.
-    When called in the main process, this returns ``None``.
-    .. note::
-       When used in a :attr:`worker_init_fn` passed over to
-       :class:`~torch.utils.data.DataLoader`, this method can be useful to
-       set up each worker process differently, for instance, using ``worker_id``
-       to configure the ``dataset`` object to only read a specific fraction of a
-       sharded dataset, or use ``seed`` to seed other libraries used in dataset
-       code.
     """
     return _worker_info
 
@@ -109,33 +91,6 @@ r"""Dummy class used to resume the fetching when worker reuse is enabled"""
 class _ResumeIteration(object):
     pass
 
-# The function `_generate_state` is adapted from `numpy.random.SeedSequence`
-# from https://github.com/numpy/numpy/blob/main/numpy/random/bit_generator.pyx
-# It's MIT licensed, here is the copyright:
-
-#
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-# SOFTWARE.
-
-# This function generates an array of int32 as the seed for
-# `numpy.random`, in order to prevent state collision due to same
-# seed and algorithm for `numpy.random` and `random` modules.
-# TODO: Implement `SeedSequence` like object for `torch.random`
 def _generate_state(base_seed, worker_id):
     INIT_A = 0x43b0d7e5
     MULT_A = 0x931e8875
@@ -194,11 +149,6 @@ def _worker_loop(dataset_kind, dataset, index_queue, data_queue, done_event,
     # logic of this function.
 
     try:
-        # Initialize C side signal handlers for SIGBUS and SIGSEGV. Python signal
-        # module's handlers are executed after Python returns from C low-level
-        # handlers, likely when the same fatal signal had already happened
-        # again.
-        # https://docs.python.org/3/library/signal.html#execution-of-python-signal-handlers
         signal_handling._set_worker_signal_handlers()
 
         torch.set_num_threads(1)
@@ -227,18 +177,6 @@ def _worker_loop(dataset_kind, dataset, index_queue, data_queue, done_event,
             init_exception = ExceptionWrapper(
                 where="in DataLoader worker process {}".format(worker_id))
 
-        # When using Iterable mode, some worker can exit earlier than others due
-        # to the IterableDataset behaving differently for different workers.
-        # When such things happen, an `_IterableDatasetStopIteration` object is
-        # sent over to the main process with the ID of this worker, so that the
-        # main process won't send more tasks to this worker, and will send
-        # `None` to this worker to properly exit it.
-        #
-        # Note that we cannot set `done_event` from a worker as it is shared
-        # among all processes. Instead, we set the `iteration_end` flag to
-        # signify that the iterator is exhausted. When either `done_event` or
-        # `iteration_end` is set, we skip all processing step and just wait for
-        # `None`.
         iteration_end = False
 
         watchdog = ManagerWatchdog()
@@ -261,9 +199,6 @@ def _worker_loop(dataset_kind, dataset, index_queue, data_queue, done_event,
                 assert done_event.is_set() or iteration_end
                 break
             elif done_event.is_set() or iteration_end:
-                # `done_event` is set. But I haven't received the final signal
-                # (None) yet. I will keep continuing until get it, and skip the
-                # processing steps.
                 continue
             idx, index = r
             idx_scale = 0
@@ -287,14 +222,8 @@ def _worker_loop(dataset_kind, dataset, index_queue, data_queue, done_event,
                 except Exception as e:
                     if isinstance(e, StopIteration) and dataset_kind == _DatasetKind.Iterable:
                         data = _IterableDatasetStopIteration(worker_id)
-                        # Set `iteration_end`
-                        #   (1) to save future `next(...)` calls, and
-                        #   (2) to avoid sending multiple `_IterableDatasetStopIteration`s.
                         iteration_end = True
                     else:
-                        # It is important that we don't store exc_info in a variable.
-                        # `ExceptionWrapper` does the correct thing.
-                        # See NOTE [ Python Traceback Reference Cycle Problem ]
                         data = ExceptionWrapper(
                             where="in DataLoader worker process {}".format(worker_id))
             data_queue.put((idx, data))

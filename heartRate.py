@@ -21,7 +21,7 @@ def predict_heart_rate(signal, Fs, min_hr=40., max_hr=180., method='fast_ideal')
         signal = signal - np.mean(signal)
         freqs, ps = compute_power_spectrum(signal, Fs, zero_pad=100)
         cs = Akima1DInterpolator(freqs, ps)
-        max_val = -np.Inf
+        max_val = -np.inf  # (np.Inf removed in NumPy 2.x)
         interval = 0.1
         min_bound = max(min(freqs), min_hr)
         max_bound = min(max(freqs), max_hr) + interval
@@ -91,7 +91,7 @@ def predict_heart_rate(signal, Fs, min_hr=40., max_hr=180., method='fast_ideal')
         else:
             return max_freq
     else:
-        raise NotImplementedError 
+        raise NotImplementedError
 
 
 def predict_instantaneous_heart_rate(signal, Fs, window_size, step_size, min_hr=40., max_hr=180., method='fast_ideal'):
@@ -111,3 +111,4 @@ def predict_instantaneous_heart_rate(signal, Fs, window_size, step_size, min_hr=
         hr_count[start_index:start_index+window_size] += window_func
     hr_signal /= hr_count
     return hr_signal
+## test
